@@ -9,7 +9,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import Message
 
-from parser import (TZ, POST_TAG_RE, ParsedRideTime,
+from parser import (TZ, POST_TAG_RE, ParsedRideTime, is_ride_date_allowed,
                     normalize_text, parse_ride_datetime)
 
 CHECK_INTERVAL_SECONDS = 2
@@ -107,6 +107,10 @@ async def admin_status(bot: Bot, chat_id: int, user_id: int) -> bool | None:
         logging.warning("Cannot verify author permissions chat=%s user=%s: %s",
                         chat_id, user_id, exc)
         return None
+    # Other bots (e.g. @inbox_77bot) are moderated even when they are group admins.
+    user = getattr(member, "user", None)
+    if user is not None and user.is_bot:
+        return False
     return member.status in ("creator", "administrator")
 
 
@@ -134,6 +138,12 @@ async def process_post(message: Message) -> None:
     if message.sender_chat is not None or message.from_user is None:
         remove_schedule(message.chat.id, message.message_id)
         return
+    if message.from_user.id == getattr(message.bot, "id", None):
+        return
+    if message.from_user.is_bot:
+        logging.info("Bot message chat=%s msg=%s from=@%s",
+                     message.chat.id, message.message_id,
+                     getattr(message.from_user, "username", None))
     status = await admin_status(message.bot, message.chat.id, message.from_user.id)
     if status is not False:
         remove_schedule(message.chat.id, message.message_id)
@@ -145,6 +155,10 @@ async def process_post(message: Message) -> None:
     parsed = parse_ride_datetime(text, message.date)
     if parsed is None:
         await delete_invalid_post(message, "missing or invalid ride date/time")
+        return
+    # message.date is the original send time, so editing later cannot bypass this.
+    if not is_ride_date_allowed(parsed.trip_start.date(), message.date):
+        await delete_invalid_post(message, "ride date outside allowed window")
         return
 
     upsert_schedule(message, parsed)

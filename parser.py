@@ -5,6 +5,8 @@ from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Europe/Kyiv")
 DELETE_DELAY = timedelta(minutes=5)
+# Rides for tomorrow may be announced only from this local hour of the current day.
+NEXT_DAY_OPEN_HOUR = 15
 
 POST_TAG_RE = re.compile(
     r"#\s*(?:водій|водитель|пасажир|пассажир)\b",
@@ -223,6 +225,20 @@ def has_ride_time(text: str, message_dt: datetime) -> bool:
     for start, end in spans:
         chars[start:end] = " " * (end - start)
     return extract_time("".join(chars), reference) is not None
+
+
+def is_ride_date_allowed(ride_date: date, message_dt: datetime) -> bool:
+    """Today's rides are always allowed; tomorrow's only from 15:00; later never.
+
+    Past dates stay allowed: they are simply deleted by the next cleanup pass.
+    """
+    message_local = message_dt.astimezone(TZ)
+    today = message_local.date()
+    if ride_date <= today:
+        return True
+    if ride_date == today + timedelta(days=1):
+        return message_local.hour >= NEXT_DAY_OPEN_HOUR
+    return False
 
 
 def parse_ride_datetime(text: str, message_dt: datetime) -> ParsedRideTime | None:
